@@ -230,3 +230,43 @@ def rename_cluster(clus, risk, n_cluster, return_ids=False):
         return clus_temp, ids
     else:
         return clus_temp
+
+def sample_permutations(n, n_permutations=100):
+    return np.array([np.random.permutation(n) for _ in range(n_permutations)])
+
+def shapley_values_time_series_groups(pred_fn, baseline_X, instance, n_permutations=100, perturb_by_time=True):
+    n_time_steps, n_features = instance.shape
+    if perturb_by_time:
+        num_groups = n_features  # Perturb each feature across all time steps
+    else:
+        num_groups = n_time_steps  # Perturb all features at each time step
+
+    permutations = sample_permutations(num_groups, n_permutations)
+    inputs = np.tile(baseline_X, (n_permutations * num_groups + 1, 1, 1))
+    shap_values = np.zeros(num_groups)
+
+    idx = 1  # Start index for perturbed inputs
+    for p in range(n_permutations):
+        for i in range(num_groups):
+            if perturb_by_time:
+                inputs[idx, :, permutations[p, i]] = instance[:, permutations[p, i]]
+            else:
+                inputs[idx, permutations[p, i], :] = instance[permutations[p, i], :]
+            idx += 1
+
+    predictions = pred_fn(inputs)  # Batch prediction
+
+    baseline_pred = predictions[0]  # Baseline prediction
+
+    idx = 1
+    for p in range(n_permutations):
+        for i in range(num_groups):
+            if perturb_by_time:
+                feature_idx = permutations[p, i]
+            else:
+                feature_idx = permutations[p, i]
+            shap_values[feature_idx] += (predictions[idx] - baseline_pred) / n_permutations
+            idx += 1
+
+    return shap_values
+

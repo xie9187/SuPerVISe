@@ -249,3 +249,38 @@ def viz_2d(data, centroids, groups, n_cluster, risk, mode, seed, save_path):
     plt.close()
 
     # c-index of 5 repeated experiments: [0.747, 0.753, 0.748, 0.752, 0.749], 0.750±0.002
+
+def plot_shap(df_shap_list, save_path, ylabels=None):
+    fig, ax = plt.subplots(1, 4, figsize=(10, 10))
+
+    # Colors for positive and negative values
+
+    for c, df_shap in enumerate(df_shap_list):
+        # Plot each SHAP values as a scatter plot
+        colors = df_shap_list[c].map(lambda x: 'tab:blue' if x < 0 else 'tab:red')
+        for i, feature in enumerate(df_shap.columns):
+            y = np.full(df_shap[feature].shape, i)  # Create a full array for the y-axis position
+            ax[c].scatter(df_shap[feature], y, alpha=0.5, c=colors[feature], edgecolor='none')  # Scatter plot
+
+            # Plot the average line
+            mean_value = df_shap[feature].mean()
+            ax[c].plot([mean_value, mean_value], [i-0.4, i+0.4], color="black", lw=2)  # Line for the mean value
+
+        # Formatting the plot
+        if c == 0:
+            ax[c].set_yticks(range(len(df_shap.columns)))
+            if ylabels is None:
+                ax[c].set_yticklabels(df_shap.columns)
+            else:
+                ax[c].set_yticklabels(ylabels)
+        else:
+            ax[c].set_yticks(range(len(df_shap.columns)), labels='')
+        max_val = np.fabs(df_shap.to_numpy())
+        ax[c].set_xlim((-np.amax(max_val), np.amax(max_val)))
+        ax[c].axvline(x=0, color='grey', linestyle='--')  # Zero line for reference
+        ax[c].set_title('S' + str(c+1))
+        ax[c].grid(True, which='both', linestyle='--', linewidth='0.5', alpha=0.7)
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()

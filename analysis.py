@@ -189,6 +189,93 @@ def viz_cluster(save_path, df):
     
     viz_utils.viz_2d(z, c_mean, clus, args.n_clusters, risk, args.dim_red, args.seed, save_path)
 
+def explain(save_path, df):
+    import models.seqVaGMM as seqVaGMM
+    import tensorflow as tf
+    import shap
+
+    with tf.device('/gpu'):
+        model = seqVaGMM.seqVaGMM(
+            latent_dim=args.n_emb,
+            hid_dim=args.n_hid,
+            num_clusters=args.n_clusters,
+            inp_shape=df.loc[:, ('obse', slice(None))].shape[1],
+            max_seq_len=args.max_seq_len,
+            survival=True,
+            monte_carlo=1,
+            sample_surv=False,
+            learn_prior=args.learn_prior,
+            seq_att=args.seq_att,
+            seed=args.seed,
+        )
+    model_path = os.path.join(save_path, 'ckpt', 'model.ckpt')
+    model.load_weights(model_path).expect_partial()
+    print('load model from: ' + model_path)
+
+    # only use data with seq_len==20
+    train_df = df[df[('meta', 'group')] == 0]
+    X_tr, y_tr, seq_len_tr = data_utils.create_numpy_data(train_df, args.max_seq_len)
+    len_is_20 = seq_len_tr == 20
+    X_tr = X_tr[len_is_20]
+    y_tr = y_tr[len_is_20]
+    seq_len_tr = seq_len_tr[len_is_20]
+
+    test_df = df[df[('meta', 'group')] == 2]
+    X_te, y_te, seq_len_te = data_utils.create_numpy_data(test_df, args.max_seq_len)
+    len_is_20 = seq_len_te == 20
+    X_te = X_te[len_is_20]
+    y_te = y_te[len_is_20]
+    seq_len_te = seq_len_te[len_is_20]
+
+    # get the cluster prediction
+    dec, z, p_c_z, risk, p_z_c = seqVaGMM.test_model(model, X_tr, np.expand_dims(y_tr, axis=-1), seq_len_tr, 64)
+    clus_tr = np.argmax(p_c_z, axis=-1)
+    dec, z, p_c_z, risk, p_z_c = seqVaGMM.test_model(model, X_te, np.expand_dims(y_te, axis=-1), seq_len_te, 64)
+    clus_te = np.argmax(p_c_z, axis=-1)
+
+    # wrap the risk prediction since SHAP needs the model to only output the variable to be explained
+    def risk_wrapper(data):
+        return seqVaGMM.risk_pred(model, data, np.ones((data.shape[0]), dtype=int) * 20, 64)
+
+    # check wrapper and model performance AUC=0.791
+    pred = risk_wrapper(X_te)
+    from sklearn.metrics import roc_auc_score
+    print('auc = ', roc_auc_score(y_te, pred))
+
+    # use the centroid as the background sample and get the shapley value of the first 100 samples in each cluster
+    feat_cols = [col[1] for col in df.columns if col[0] == 'obse']
+    time_cols = ['T' + str(t) for t in range(args.max_seq_len)]
+    feats_shap_dfs = []
+    times_shap_dfs = []
+    for c in range(args.n_clusters):
+        feats_shap_df_path = join(save_path, 'feats_shap_S{:}.csv'.format(c+1))
+        times_shap_df_path = join(save_path, 'times_shap_S{:}.csv'.format(c+1))
+
+        if os.path.exists(feats_shap_df_path) and os.path.exists(times_shap_df_path):
+            feats_shap_df = pd.read_csv(feats_shap_df_path, index_col=0)
+            times_shap_df = pd.read_csv(times_shap_df_path, index_col=0)
+        else:
+            X_c = X_tr[clus_tr==c]
+            X_bg = np.mean(X_c, axis=0)
+            X_te_c = X_te[clus_te==c]
+            samples_feats_shap, samples_times_shap = [], []
+            for i in progressbar.progressbar(range(100)):
+                X_sample = X_te_c[i]
+                feats_shap = data_utils.shapley_values_time_series_groups(risk_wrapper, X_bg, X_sample, perturb_by_time=True)
+                times_shap = data_utils.shapley_values_time_series_groups(risk_wrapper, X_bg, X_sample, perturb_by_time=False)
+                samples_feats_shap.append(feats_shap)
+                samples_times_shap.append(times_shap)
+
+            feats_shap_df = pd.DataFrame(np.stack(samples_feats_shap), columns=feat_cols)
+            feats_shap_df.to_csv(feats_shap_df_path)
+            times_shap_df = pd.DataFrame(np.stack(samples_times_shap), columns=time_cols)
+            times_shap_df.to_csv(times_shap_df_path)
+        feats_shap_dfs.append(feats_shap_df)
+        times_shap_dfs.append(times_shap_df)
+    viz_utils.plot_shap(feats_shap_dfs, join(save_path, 'feats_shap.png'))
+    viz_utils.plot_shap(times_shap_dfs, join(save_path, 'times_shap.png'), [str(t*4 - 20) + 'h' for t in range(20)])
+
+
 if __name__ == '__main__':
     np.random.seed(args.seed)
 
@@ -217,6 +304,9 @@ if __name__ == '__main__':
     elif args.model == 'viz_cluster':
         result_path = join(args.result_path, args.exp_name, args.dataset, 'cluster4', 'seed0')
         viz_cluster(result_path, df[df[('meta', 'group')] == 2])
+    elif args.model == 'explain':
+        result_path = join(args.result_path, args.exp_name, args.dataset, 'cluster4', 'seed0')
+        explain(result_path, df)
     elif args.model == 'seqVaGMM':
         # train models
         save_path = join(args.result_path, args.exp_name, args.dataset, 'cluster' + str(args.n_clusters), 'seed' + str(args.seed))
