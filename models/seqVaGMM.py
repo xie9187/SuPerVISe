@@ -283,5 +283,5 @@ def train_model(
 def test_model(model, X, y, seq_len, b_size):
     model.sample_surv = False
     tf.keras.backend.set_value(model.use_t, np.array([0.0]))
-    dec, z_sample, p_c_z, risk, p_z_c, att = model.predict((X, y, seq_len), batch_size=b_size)
-    return dec, z_sample, p_c_z, risk, p_z_c
+    dec, z_sample, p_s_z, risk, p_z_s, att = model.predict((X, y, seq_len), batch_size=b_size)
+    return dec, z_sample, p_s_z, risk, p_z_s
